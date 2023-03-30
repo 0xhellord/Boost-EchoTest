@@ -13,19 +13,31 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <thread>
 #include <utility>
 
 using boost::asio::ip::tcp;
-time_t last;
-
-std::atomic<uint64_t> total;
-std::atomic<uint64_t> old;
 
 class session : public std::enable_shared_from_this<session> {
 public:
   session(tcp::socket socket) : socket_(std::move(socket)) {}
 
-  void start() { do_read(); }
+  void start() {
+
+    std::thread t([this]() {
+      std::atomic<uint64_t> old{0};
+      while (true) {
+        usleep(1000000);
+        uint64_t now_s_pkts = total.load();
+        printf("qps: %lu\n", now_s_pkts - old);
+        old = now_s_pkts;
+      }
+    });
+    t.detach();
+    
+
+    do_read();
+  }
 
 private:
   void do_read() {
@@ -37,16 +49,9 @@ private:
             std::cout << "length: " << length << "\n";
           }
           if (!ec) {
-            // printf("%s %lu\n",data_,length);
             total.fetch_add(1);
-
-            if (time(NULL) - last >= 1) {
-              printf("qps: %lu\n", total - old);
-              old = total.load();
-              last = time(NULL);
-            }
-            do_read();
             do_write(length);
+            do_read();
           }
         });
   }
@@ -66,6 +71,8 @@ private:
   tcp::socket socket_;
   enum { max_length = 1024 };
   char data_[max_length];
+
+  std::atomic<uint64_t> total;
 };
 
 class server {
@@ -102,6 +109,7 @@ int main(int argc, char *argv[]) {
     server s(io_context, std::atoi(argv[1]));
 
     io_context.run();
+
   } catch (std::exception &e) {
     std::cerr << "Exception: " << e.what() << "\n";
   }
